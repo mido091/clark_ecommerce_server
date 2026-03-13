@@ -31,11 +31,18 @@ const app = express();
 app.set("trust proxy", 1);
 
 // ── CORS ──────────────────────────────────────────────────────────
+const frontendUrls = (process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean);
+
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-  process.env.FRONTEND_URL,
-].filter(Boolean).map(origin => origin.replace(/\/$/, "")); // Normalize: remove trailing slashes
+  ...frontendUrls
+].map(origin => origin.replace(/\/$/, "")); // Normalize: remove trailing slashes
+
+console.log("🛡️ CORS Whitelist:", allowedOrigins);
 
 const corsOptions = {
   origin: (origin, callback) => {
