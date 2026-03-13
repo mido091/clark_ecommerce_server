@@ -56,8 +56,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// Handle OPTIONS preflight for all routes explicitly
-app.options("*", cors(corsOptions));
+// Handle OPTIONS preflight for all routes explicitly ((.*) used for Vercel/path-to-regexp stability)
+app.options("(.*)", cors(corsOptions));
 
 // ── Core middleware ────────────────────────────────────────────────
 app.use(
