@@ -34,24 +34,30 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
-    credentials: true,
-  }),
-);
-// Handle OPTIONS preflight for all routes (Express 5 compatible)
-app.options(/(.*)/, cors());
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type", 
+    "Authorization", 
+    "X-Requested-With",
+    "X-CSRF-Token" // Added for CSRF protection layer
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200, // Some legacy browsers choke on 204
+};
+
+app.use(cors(corsOptions));
+// Handle OPTIONS preflight for all routes explicitly
+app.options("*", cors(corsOptions));
 
 // ── Core middleware ────────────────────────────────────────────────
 app.use(
