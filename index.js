@@ -50,10 +50,15 @@ const corsOptions = {
     if (!origin) return callback(null, true);
     
     const normalizedOrigin = origin.replace(/\/$/, "");
-    if (allowedOrigins.includes(normalizedOrigin)) {
+    
+    // Final Solution: Explicit whitelist OR any Vercel subdomain
+    const isWhitelisted = allowedOrigins.includes(normalizedOrigin);
+    const isVercelSubdomain = normalizedOrigin.endsWith(".vercel.app");
+
+    if (isWhitelisted || isVercelSubdomain) {
       callback(null, true);
     } else {
-      console.error(`[CORS REJECTED] Origin: ${origin} | Allowed: ${allowedOrigins.join(", ")}`);
+      console.error(`[CORS REJECTED] Origin: ${origin} | Not in Whitelist and not a Vercel subdomain.`);
       callback(new Error(`Not allowed by CORS: ${origin}`));
     }
   },
