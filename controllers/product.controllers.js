@@ -1,5 +1,6 @@
 import db from "../config/db.js";
 import slugify from "slugify";
+import { normalizeArabic, expandQuery, sanitizeSearch } from "../utils/searchHelper.js";
 // create product
 const createProduct = async (req, res, next) => {
   try {
@@ -99,8 +100,17 @@ const getAllProducts = async (req, res, next) => {
     let queryParams = [];
 
     if (name) {
-      whereConditions.push("products.name LIKE ?");
-      queryParams.push(`%${name}%`);
+      const sanitized = sanitizeSearch(name);
+      const expandedTerms = expandQuery(name);
+      
+      const searchParts = [];
+      expandedTerms.forEach(term => {
+        searchParts.push("(products.name LIKE ? OR products.name_ar LIKE ? OR products.description LIKE ? OR products.description_ar LIKE ?)");
+        const likeTerm = `%${term}%`;
+        queryParams.push(likeTerm, likeTerm, likeTerm, likeTerm);
+      });
+      
+      whereConditions.push(`(${searchParts.join(" OR ")})`);
     }
 
     if (category_id) {
