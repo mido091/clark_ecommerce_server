@@ -100,17 +100,23 @@ const getAllProducts = async (req, res, next) => {
     let queryParams = [];
 
     if (name) {
-      const sanitized = sanitizeSearch(name);
-      const expandedTerms = expandQuery(name);
+      const words = name.trim().split(/\s+/).filter(w => w.length > 1);
       
-      const searchParts = [];
-      expandedTerms.forEach(term => {
-        searchParts.push("(products.name LIKE ? OR products.name_ar LIKE ? OR products.description LIKE ? OR products.description_ar LIKE ?)");
-        const likeTerm = `%${term}%`;
-        queryParams.push(likeTerm, likeTerm, likeTerm, likeTerm);
+      const wordGroups = [];
+      words.forEach(word => {
+        const expandedTerms = expandQuery(word);
+        const termsSubQuery = [];
+        expandedTerms.forEach(term => {
+          termsSubQuery.push("(products.name LIKE ? OR products.name_ar LIKE ? OR products.description LIKE ? OR products.description_ar LIKE ?)");
+          const likeTerm = `%${term}%`;
+          queryParams.push(likeTerm, likeTerm, likeTerm, likeTerm);
+        });
+        wordGroups.push(`(${termsSubQuery.join(" OR ")})`);
       });
-      
-      whereConditions.push(`(${searchParts.join(" OR ")})`);
+
+      if (wordGroups.length > 0) {
+        whereConditions.push(`(${wordGroups.join(" AND ")})`);
+      }
     }
 
     if (category_id) {
