@@ -1,3 +1,25 @@
+/**
+ * @file product.controllers.js
+ * @description Master controller for Products architecture and inventory configurations.
+ *
+ * This controller manages the extremely complex creation and structuring of dynamic products.
+ * Products can be either "Simple" (just a price and stock) or "Complex" (having variants like Colors and Sizes).
+ * 
+ * Variant Architecture (The Matrix):
+ *  If a product has Colors [Red, Blue] and Sizes [M, L], it generates a matrix of `product_variants`:
+ *   - Red / M (Stock: 10)
+ *   - Red / L (Stock: 5)
+ *   - Blue / M (Stock: 0)
+ *   - Blue / L (Stock: 20)
+ * 
+ * Image Management:
+ *  - Colors can have their own dedicated image galleries (`product_color_images`)
+ *  - If no colors exist, standard flat images are used (`product_images`)
+ *
+ * The heavy lifting (inserting/updating across 4 different database tables simultaneously)
+ * is handled securely inside an atomic transaction within `saveProductRecord()`.
+ */
+
 import db from "../config/db.js";
 import slugify from "slugify";
 import jwt from "jsonwebtoken";
@@ -291,6 +313,24 @@ function buildRelatedProductImageSubquery() {
   `;
 }
 
+/**
+ * Core Engine: Saves or Updates a Product and all its multi-dimensional relationships.
+ * 
+ * Execution Flow (Atomic Transaction):
+ *  1. Process Multipart FormData (Files + JSON payload strings).
+ *  2. Validate Color Hex Codes and ensure unique Client Keys.
+ *  3. Calculate the Expected Variant Combinations array (Color × Size).
+ *  4. Verify the incoming `variant_stock` array perfectly matches the expected combinations.
+ *  5. Insert/Update `products` base table.
+ *  6. Wipe and Insert new `product_images` (if it's a simple product).
+ *  7. Sync `product_colors` and `product_color_images` to disk.
+ *  8. Wipe and Re-insert `product_variants` exact stock rows based on combinations.
+ *  9. Commit Transaction.
+ * 
+ * @param {Object} req - The Express Request object (contains Multer files and body payload)
+ * @param {Object|null} existingProduct - If provided, the engine runs in UPDATE mode instead of CREATE.
+ * @returns {Promise<{success: boolean, message: string, productId: number}>}
+ */
 async function saveProductRecord(req, existingProduct = null) {
   const connection = await db.getConnection();
   try {
@@ -749,6 +789,12 @@ function sanitizeProductForViewer(product, req) {
   return publicProduct;
 }
 
+/**
+ * POST /api/products
+ * 
+ * Admin endpoint to create a new product. Wraps the `saveProductRecord` engine.
+ * Access: Protected (Admin or Owner)
+ */
 const createProduct = async (req, res, next) => {
   try {
     const result = await saveProductRecord(req);
@@ -758,6 +804,21 @@ const createProduct = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/products
+ * 
+ * Deeply optimized endpoint to fetch a paginated table of products.
+ * 
+ * Features:
+ *  - Multi-term Fuzzy Search: Breaks down the search query into words, applies translation equivalents (`expandQuery`),
+ *    and searches across multiple fields (name, name_ar, description).
+ *  - Category and Price Range Filtering.
+ *  - Hydrates each product with its supplementary variants, colors, and images automatically.
+ *  - Security (`sanitizeProductForViewer`): Strips sensitive data like `net_profit` from public API consumers.
+ * 
+ * @route   GET /api/products
+ * @access  Public (Guest accessible, but admins see more fields)
+ */
 const getAllProducts = async (req, res, next) => {
   try {
     await ensureFinancialColumns();
@@ -862,6 +923,16 @@ const getAllProducts = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/products/:id
+ * 
+ * Fetches a single product deeply populated with all its options, sizes, and colors.
+ * Used on the public Product Detail Page (PDP).
+ * Also asynchronously calculates the live Review Average Rating and fetches 5 Related Products.
+ * 
+ * @route   GET /api/products/:id
+ * @access  Public
+ */
 const getProductById = async (req, res, next) => {
   try {
     await ensureFinancialColumns();
@@ -930,6 +1001,15 @@ const getProductById = async (req, res, next) => {
   }
 };
 
+/**
+ * PUT /api/products/:id
+ * 
+ * Admin endpoint to edit an existing product. 
+ * Invokes the `saveProductRecord` engine in "UPDATE" mode.
+ * 
+ * @route   PUT /api/products/:id
+ * @access  Protected (Admin or Owner)
+ */
 const updateProduct = async (req, res, next) => {
   try {
     await ensureFinancialColumns();
@@ -951,6 +1031,16 @@ const updateProduct = async (req, res, next) => {
   }
 };
 
+/**
+ * DELETE /api/products/:id
+ * 
+ * Fully purges a product and unlinks all memory footprints out of the database.
+ * Cascades downwards into `product_images`, `product_colors`, and `product_variants`.
+ * Wrapped entirely in an atomic Transaction to prevent dangling orphans.
+ * 
+ * @route   DELETE /api/products/:id
+ * @access  Protected (Admin or Owner)
+ */
 const deleteProduct = async (req, res, next) => {
   const connection = await db.getConnection();
   try {

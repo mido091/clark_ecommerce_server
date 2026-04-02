@@ -1,27 +1,71 @@
+/**
+ * @file category.controllers.js
+ * @description Category management controller for the product catalog.
+ *
+ * Categories are the top-level taxonomy for organizing products.
+ * Each product belongs to exactly one category.
+ *
+ * Endpoints:
+ *  - createCategory              — POST   /categories        — Create a new category
+ *  - getAllCategories             — GET    /categories        — List all categories (plain)
+ *  - getCategoriesWithProducts   — GET    /categories/with-products — All categories + their products
+ *  - getCategoryById             — GET    /categories/:id    — Fetch a single category
+ *  - getCategoryByIdWithProducts — GET    /categories/:id/products — Category + its products
+ *  - updateCategory              — PUT    /categories/:id    — Update category fields/image
+ *  - deleteCategory              — DELETE /categories/:id    — Cascade delete category + products
+ *
+ * Notes:
+ *  - Slugs are auto-generated from the English name using the `slugify` library
+ *  - Both English (name) and Arabic (name_ar) names are required for bilingual support
+ *  - deleteCategory uses a transaction to cascade-delete product images → products → category
+ */
+
 import db from "../config/db.js";
 import slugify from "slugify";
 
+// ── createCategory ─────────────────────────────────────────────────────────────
+/**
+ * POST /api/categories
+ *
+ * Creates a new product category. Both English and Arabic names are required.
+ * Slug is auto-generated from the English name (URL-safe, lowercase, hyphened).
+ *
+ * Body: { name, name_ar, parent_id?, is_active?, sort_order? }
+ * File: image (via Multer — optional)
+ *
+ * @route  POST /api/categories
+ * @access Protected — Admin or Owner only
+ */
 const createCategory = async (req, res, next) => {
   try {
     let { name, slug, parent_id, is_active, sort_order, name_ar } =
       req.body || {};
+
+    // Apply defaults for optional fields
     parent_id = parent_id || null;
     is_active = is_active !== undefined ? is_active : true;
     sort_order = sort_order !== undefined ? sort_order : 0;
+
+    // Auto-generate the slug from the English name (e.g., "Men's Shoes" → "mens-shoes")
     slug = slugify(name, { lower: true, strict: true });
-    //check if name and slug are required
+
+    // Both English name and Arabic name are required for the bilingual UI
     if (!name || !slug || !name_ar) {
       return res.status(400).json({ message: "Name and slug are required" });
     }
-    //image upload
+
+    // Get the Cloudinary URL from uploaded file (if any)
     const image_url = req.file ? req.file.path : "";
+
+    // Check for duplicate slug to prevent two categories with the same URL identifier
     const [rows] = await db.query("SELECT * FROM categories WHERE slug = ?", [
       slug,
     ]);
     if (rows.length > 0) {
       return res.status(400).json({ message: "Category already exists" });
     }
-    //insert category
+
+    // Insert the new category
     const [result] = await db.query(
       "INSERT INTO categories (name, slug, parent_id, is_active, sort_order, image_url,name_ar) VALUES (?, ?, ?, ?, ?, ?,?)",
       [name, slug, parent_id, is_active, sort_order, image_url, name_ar],
@@ -29,16 +73,30 @@ const createCategory = async (req, res, next) => {
     if (result.affectedRows === 0) {
       return res.status(400).json({ message: "Category not created" });
     }
-    //if success
+
     res.status(201).json({ message: "Category created successfully" });
   } catch (error) {
     next(error);
   }
 };
-//get categories with products
+
+// ── getCategoriesWithProducts ─────────────────────────────────────────────────
+/**
+ * GET /api/categories/with-products
+ *
+ * Fetches all categories and aggregates their associated active products
+ * into a JSON array using MySQL's JSON_ARRAYAGG + JSON_OBJECT.
+ * Used on the homepage to display category carousels.
+ *
+ * Each product in the array includes: id, name, name_ar, price, slug, image (first image only)
+ * Categories with no products get an empty array [].
+ *
+ * @route  GET /api/categories/with-products
+ * @access Public
+ */
 const getCategoriesWithProducts = async (req, res, next) => {
   try {
-    // We use full table names: categories, products, and product_images
+    // MySQL JSON functions aggregate products inline without N+1 queries
     const [rows] = await db.query(`
       SELECT 
         categories.*,
@@ -65,7 +123,7 @@ const getCategoriesWithProducts = async (req, res, next) => {
       GROUP BY categories.id
     `);
 
-    // Format the products field to ensure it's a valid JavaScript Array
+    // MySQL returns JSON columns as strings — parse them into real JS arrays
     const categories = rows.map((category) => ({
       ...category,
       products:
@@ -74,25 +132,32 @@ const getCategoriesWithProducts = async (req, res, next) => {
           : category.products,
     }));
 
-    // Success response with clear English message
     res.status(200).json({
       status: true,
       message: "Categories and their linked products fetched successfully",
       categories,
     });
   } catch (error) {
-    // Pass any errors to the global error handler
     next(error);
   }
 };
-//get all categories
+
+// ── getAllCategories ───────────────────────────────────────────────────────────
+/**
+ * GET /api/categories
+ *
+ * Returns all categories as a flat array without product data.
+ * Used for admin dropdowns, filter sidebars, and site navigation.
+ *
+ * @route  GET /api/categories
+ * @access Public
+ */
 const getAllCategories = async (req, res, next) => {
   try {
     const [rows] = await db.query("SELECT * FROM categories");
     if (rows.length === 0) {
       return res.status(400).json({ message: "Categories not found" });
     }
-    //if success
     res
       .status(200)
       .json({
@@ -104,7 +169,17 @@ const getAllCategories = async (req, res, next) => {
     next(error);
   }
 };
-//get category by id
+
+// ── getCategoryById ────────────────────────────────────────────────────────────
+/**
+ * GET /api/categories/:id
+ *
+ * Fetches a single category by its database ID.
+ * Returns only category fields (no products).
+ *
+ * @route  GET /api/categories/:id
+ * @access Public
+ */
 const getCategoryById = async (req, res, next) => {
   try {
     const id = req.params.id;
@@ -117,7 +192,6 @@ const getCategoryById = async (req, res, next) => {
     if (rows.length === 0) {
       return res.status(400).json({ message: "Category not found" });
     }
-    //if success
     res
       .status(200)
       .json({ message: "Category fetched successfully", category: rows[0] });
@@ -125,12 +199,24 @@ const getCategoryById = async (req, res, next) => {
     next(error);
   }
 };
-//get category by id with products
+
+// ── getCategoryByIdWithProducts ────────────────────────────────────────────────
+/**
+ * GET /api/categories/:id/products
+ *
+ * Fetches a specific category AND its associated products aggregated via JSON_ARRAYAGG.
+ * Used when a user clicks on a category from the navigation menu.
+ *
+ * The MySQL query returns products_list as a JSON string from DB.
+ * We parse it and expose it as the clean `products` array in the response.
+ *
+ * @route  GET /api/categories/:id/products
+ * @access Public
+ */
 const getCategoryByIdWithProducts = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // We fetch a specific category and aggregate its products into a JSON array
     const [rows] = await db.query(
       `
       SELECT 
@@ -161,7 +247,6 @@ const getCategoryByIdWithProducts = async (req, res, next) => {
       [id],
     );
 
-    // Check if the category exists
     if (rows.length === 0) {
       return res.status(404).json({
         status: false,
@@ -169,7 +254,7 @@ const getCategoryByIdWithProducts = async (req, res, next) => {
       });
     }
 
-    // Format the products_list to be a clean JavaScript array
+    // Reshape the row: rename products_list → products, and parse the JSON string
     const category = {
       ...rows[0],
       products:
@@ -178,7 +263,7 @@ const getCategoryByIdWithProducts = async (req, res, next) => {
           : rows[0].products_list,
     };
 
-    // Remove the raw products_list field from the final response
+    // Remove the raw database field (already exposed as 'products')
     delete category.products_list;
 
     res.status(200).json({
@@ -187,17 +272,31 @@ const getCategoryByIdWithProducts = async (req, res, next) => {
       category,
     });
   } catch (error) {
-    // Pass the error to the global error handler
     next(error);
   }
 };
-//update category
+
+// ── updateCategory ─────────────────────────────────────────────────────────────
+/**
+ * PUT /api/categories/:id
+ *
+ * Updates a category's fields. Supports partial updates — any omitted field
+ * falls back to the existing value from the database.
+ *
+ * Body: { name?, name_ar?, parent_id?, is_active?, sort_order? }
+ * File: image (via Multer — optional, replaces existing image URL)
+ *
+ * @route  PUT /api/categories/:id
+ * @access Protected — Admin or Owner only
+ */
 const updateCategory = async (req, res, next) => {
   try {
     const id = req.params.id;
     if (!id) {
       return res.status(400).json({ message: "Category not found" });
     }
+
+    // Fetch current category to use as defaults for any unspecified fields
     const [rows] = await db.query("SELECT * FROM categories WHERE id = ?", [
       id,
     ]);
@@ -207,14 +306,18 @@ const updateCategory = async (req, res, next) => {
 
     let { name, slug, parent_id, is_active, sort_order, name_ar } =
       req.body || {};
+
+    // Fall back to existing values for any unspecified fields
     name = name || rows[0].name;
-    slug = name ? slugify(name, { lower: true, strict: true }) : rows[0].slug;
+    slug = name ? slugify(name, { lower: true, strict: true }) : rows[0].slug; // Regenerate slug from new name
     parent_id = parent_id || rows[0].parent_id;
     is_active = is_active !== undefined ? is_active : rows[0].is_active;
     sort_order = sort_order || rows[0].sort_order;
     name_ar = name_ar || rows[0].name_ar;
-    //image upload
+
+    // Use new uploaded image, or keep existing Cloudinary URL
     const image_url = req.file ? req.file.path : rows[0].image_url;
+
     const [result] = await db.query(
       "UPDATE categories SET name = ?, slug = ?, parent_id = ?, is_active = ?, sort_order = ?, image_url = ?,name_ar = ? WHERE id = ?",
       [name, slug, parent_id, is_active, sort_order, image_url, name_ar, id],
@@ -222,22 +325,37 @@ const updateCategory = async (req, res, next) => {
     if (result.affectedRows === 0) {
       return res.status(400).json({ message: "Category not updated" });
     }
-    //if success
+
     res.status(200).json({ message: "Category updated successfully" });
   } catch (error) {
     next(error);
   }
 };
-//delete category
-// Delete a specific category and handle its dependencies
+
+// ── deleteCategory ─────────────────────────────────────────────────────────────
+/**
+ * DELETE /api/categories/:id
+ *
+ * Permanently deletes a category and all its associated data using a DB transaction.
+ * Cascade order (to satisfy foreign key constraints):
+ *  1. Delete product_images for all products in this category
+ *  2. Delete all products in this category
+ *  3. Delete the category itself
+ *
+ * IMPORTANT: This is a destructive operation. All products in the category are lost.
+ * A dedicated transaction + connection is used to ensure atomicity.
+ *
+ * @route  DELETE /api/categories/:id
+ * @access Protected — Admin or Owner only
+ */
 const deleteCategory = async (req, res, next) => {
-  // Get a dedicated connection for the transaction
+  // Get a dedicated connection from the pool for this transaction
   const connection = await db.getConnection();
 
   try {
     const { id } = req.params;
 
-    // 1. Check if the category exists before proceeding
+    // Check the category exists before starting the transaction
     const [categoryRows] = await connection.query(
       "SELECT * FROM categories WHERE id = ?",
       [id],
@@ -247,21 +365,21 @@ const deleteCategory = async (req, res, next) => {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    // 3. Start Database Transaction
+    // Start atomic transaction — all steps succeed or all are rolled back
     await connection.beginTransaction();
 
-    // 4. Cascade Delete: Delete product images first
-    // We target all products belonging to this category
+    // Step 1: Delete product images for all products in this category
+    // (must happen BEFORE deleting products due to foreign key constraint)
     await connection.query(
       `DELETE FROM product_images 
        WHERE product_id IN (SELECT id FROM products WHERE category_id = ?)`,
       [id],
     );
 
-    // 5. Cascade Delete: Delete products
+    // Step 2: Delete all products belonging to this category
     await connection.query("DELETE FROM products WHERE category_id = ?", [id]);
 
-    // 6. Delete the category record itself
+    // Step 3: Delete the category record itself
     const [result] = await connection.query(
       "DELETE FROM categories WHERE id = ?",
       [id],
@@ -271,7 +389,7 @@ const deleteCategory = async (req, res, next) => {
       throw new Error("Failed to delete category from database");
     }
 
-    // 7. Commit the transaction
+    // Commit the transaction — all steps succeeded
     await connection.commit();
 
     res.status(200).json({
@@ -279,15 +397,16 @@ const deleteCategory = async (req, res, next) => {
       message: "Category and all its linked products/images deleted successfully",
     });
   } catch (error) {
-    // Rollback changes if any error occurs
+    // Roll back all changes if any step failed
     await connection.rollback();
     next(error);
   } finally {
-    // Always release the connection back to the pool
+    // Always release the connection back to the pool (even on error)
     connection.release();
   }
 };
-//export
+
+// ── Exports ────────────────────────────────────────────────────────────────────
 export {
   createCategory,
   getAllCategories,

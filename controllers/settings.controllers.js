@@ -1,3 +1,18 @@
+/**
+ * @file settings.controllers.js
+ * @description Global Site Settings and Configuration Manager.
+ *
+ * This controller manages the single global settings row (`site_settings` table, ID=1).
+ * It dictates the appearance, business logic, and integrations of the entire platform.
+ * 
+ * Capabilities:
+ *  - Dynamic UI configuration (Site Name, Currencies, Social Links).
+ *  - Marketing Integrations (Google Analytics IDs, Custom raw Scripts).
+ *  - Shipping configuration (Valid governorates and delivery costs).
+ *  - Asset Management: Uploads logos and automatically deletes old assets from Cloudinary
+ *    to prevent orphaned files and save storage space.
+ */
+
 import db from "../config/db.js";
 import { v2 as cloudinary } from "cloudinary";
 import { normalizeGovernorates } from "../utils/egyptGovernorates.js";
@@ -75,6 +90,15 @@ async function cleanupCloudinary(newPath, oldUrl) {
   }
 }
 
+/**
+ * GET /api/settings
+ * 
+ * Fetches the global application settings. 
+ * Requested heavily by the frontend on initial load to configure themes, currencies, and tracking scripts.
+ *
+ * @route   GET /api/settings
+ * @access  Public
+ */
 const getSettings = async (_req, res, next) => {
   try {
     const [rows] = await db.query("SELECT * FROM site_settings LIMIT 1");
@@ -93,6 +117,20 @@ const getSettings = async (_req, res, next) => {
   }
 };
 
+/**
+ * PUT /api/settings
+ * 
+ * Master update endpoint for all general site settings.
+ * Accepts both text fields and multipart files (Logos/Favicons).
+ * 
+ * Features:
+ *  - Dynamic Upsert: Checks if ID=1 exists. If so, updates it. If not, creates it.
+ *  - Automatic Cloudinary Garbage Collection: When a new logo is uploaded, 
+ *    the old logo URL is extracted and deleted permanently from the Cloudinary bucket.
+ *
+ * @route   PUT /api/settings
+ * @access  Protected (Owner only - strictest security level)
+ */
 const updateSettings = async (req, res, next) => {
   try {
     const [existingRows] = await db.query("SELECT * FROM site_settings LIMIT 1");
@@ -156,6 +194,16 @@ const updateSettings = async (req, res, next) => {
   }
 };
 
+/**
+ * PUT /api/settings/shipping
+ * 
+ * Partially updates ONLY the shipping governorates array.
+ * Separated from the main settings update route because shipping locations
+ * are managed within their own distinct UI tab inside the Admin Dashboard.
+ *
+ * @route   PUT /api/settings/shipping
+ * @access  Protected (Owner only)
+ */
 const updateShippingSettings = async (req, res, next) => {
   try {
     const [existingRows] = await db.query("SELECT * FROM site_settings LIMIT 1");

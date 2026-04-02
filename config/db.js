@@ -1,8 +1,20 @@
 /**
  * @file db.js
- * @description Database connection pool configuration using mysql2.
- * This module exports a promise-based MySQL connection pool with support
- * for named placeholders and automatic keep-alive.
+ * @description MySQL connection pool configuration.
+ *
+ * Uses `mysql2/promise` (the async/await-friendly MySQL client).
+ * The pool is created once and shared across all modules via a singleton export.
+ *
+ * SSL Configuration:
+ *   - If DB_ATTR_SSL_CA is a raw PEM certificate string → use it directly
+ *   - If DB_ATTR_SSL_CA is a file path → read the file from disk
+ *   - If the file doesn't exist → fall back to relaxed TLS (rejectUnauthorized: false)
+ *   - This covers TiDB Cloud, PlanetScale, and self-hosted MySQL with TLS
+ *
+ * Pool Options:
+ *   - connectionLimit: 10 simultaneous DB connections
+ *   - keepAlive: Ping idle connections every 10s to prevent cloud DB timeouts
+ *   - namedPlaceholders: Allows :name syntax in SQL queries
  */
 
 import mysql from "mysql2/promise";
@@ -10,13 +22,25 @@ import { env } from "./env.js";
 import fs from "fs";
 import path from "path";
 
+/**
+ * Resolves the SSL certificate configuration for the database connection.
+ *
+ * Priority:
+ *  1. DB_ATTR_SSL_CA starts with "-----BEGIN CERTIFICATE-----" → raw PEM string
+ *  2. DB_ATTR_SSL_CA is a file path → read file from disk
+ *  3. File not found → relaxed TLS without custom CA (warns in console)
+ *
+ * @returns {object|undefined} SSL options object or undefined if no SSL needed
+ */
 const resolveSslConfig = () => {
   const rawValue = `${process.env.DB_ATTR_SSL_CA || "isrgrootx1.pem"}`.trim();
 
+  // No SSL value provided — return undefined (no SSL or rely entirely on server default)
   if (!rawValue) {
     return undefined;
   }
 
+  // Direct PEM certificate content provided as an environment variable
   if (rawValue.startsWith("-----BEGIN CERTIFICATE-----")) {
     return {
       ca: rawValue,
@@ -24,10 +48,12 @@ const resolveSslConfig = () => {
     };
   }
 
+  // Treat value as a file path (absolute or relative to process.cwd())
   const certificatePath = path.isAbsolute(rawValue)
     ? rawValue
     : path.join(process.cwd(), rawValue);
 
+  // File doesn't exist — warn and fall back to relaxed TLS
   if (!fs.existsSync(certificatePath)) {
     console.warn("SSL CA file not found; using relaxed TLS settings without custom CA", {
       certificatePath,
@@ -37,26 +63,34 @@ const resolveSslConfig = () => {
     };
   }
 
+  // File found — use it as the CA certificate bundle
   return {
     ca: fs.readFileSync(certificatePath, "utf8"),
     rejectUnauthorized: false,
   };
 };
 
+/**
+ * The global database connection pool.
+ * Shared across the entire application — import `pool` or `default` to use it.
+ */
 const pool = mysql.createPool({
   host: env.dbHost,
   user: env.dbUser,
   password: env.dbPassword,
   database: env.dbName,
   port: env.dbPort,
-  ssl: resolveSslConfig(),
-  namedPlaceholders: true,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 10000,
+  ssl: resolveSslConfig(),          // Dynamic SSL based on env
+  namedPlaceholders: true,          // Enables :paramName syntax in queries
+  waitForConnections: true,         // Queue requests when all connections are in use
+  connectionLimit: 10,              // Maximum concurrent connections
+  queueLimit: 0,                    // Unlimited queue size (0 = no limit)
+  enableKeepAlive: true,            // Send periodic keep-alive pings
+  keepAliveInitialDelay: 10000,     // First keep-alive after 10 seconds of idle
 });
+
+// Listen for unexpected idle connection errors (e.g. DB server restarted)
+// Log them but don't crash — the pool will reconnect automatically
 pool.on("error", (err) => {
   console.error("Unexpected error on idle database client", {
     name: err.name,

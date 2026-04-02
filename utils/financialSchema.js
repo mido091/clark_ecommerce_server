@@ -1,7 +1,51 @@
+/**
+ * @file financialSchema.js
+ * @description On-demand schema migration utility for financial columns.
+ *
+ * This module ensures that two financial columns exist in the database
+ * before any code that depends on them runs. It acts as a lazy schema migration:
+ *
+ *  - `products.net_profit` (DECIMAL 10,2, DEFAULT 0.00)
+ *     → Tracks the profit margin per product (price minus cost)
+ *
+ *  - `order_items.unit_net_profit` (DECIMAL 10,2, DEFAULT 0.00)
+ *     → Snapshot of the product's net_profit at the time of the order
+ *       (preserved even if the product's net_profit is later changed)
+ *
+ * Why runtime migration?
+ *  These columns may not exist on older database instances that were created
+ *  before this feature was added. Rather than requiring manual ALTER TABLE,
+ *  the code checks and adds them automatically on first use.
+ *
+ * Singleton pattern:
+ *  `ensureFinancialColumnsPromise` caches the migration promise so the ALTER TABLE
+ *  queries only run once per server lifetime, even if called from many request handlers.
+ *
+ * Usage:
+ *  Call `await ensureFinancialColumns()` at the top of any controller that
+ *  reads or writes net_profit or unit_net_profit fields.
+ */
+
 import db from "../config/db.js";
 
+/**
+ * Module-level singleton promise.
+ * Set on the first call, reused on all subsequent calls.
+ * Reset to null if the migration fails (allows retry on next request).
+ *
+ * @type {Promise<void>|null}
+ */
 let ensureFinancialColumnsPromise = null;
 
+/**
+ * Checks whether a specific column exists in a given table.
+ * Uses INFORMATION_SCHEMA which is supported by MySQL and TiDB.
+ *
+ * @param {object} connection - Active MySQL connection
+ * @param {string} tableName  - Name of the table to check
+ * @param {string} columnName - Name of the column to check for
+ * @returns {Promise<boolean>} True if the column exists
+ */
 async function hasColumn(connection, tableName, columnName) {
   const [rows] = await connection.query(
     `
@@ -18,13 +62,21 @@ async function hasColumn(connection, tableName, columnName) {
   return rows.length > 0;
 }
 
+/**
+ * Internal function that runs the actual ALTER TABLE migrations.
+ * Uses the provided connection (either from a transaction or a fresh pool connection).
+ *
+ * @param {object} connection - Active MySQL connection
+ */
 async function ensureFinancialColumnsWithConnection(connection) {
+  // ── Check products.net_profit ──────────────────────────────────────────────
   const productHasNetProfit = await hasColumn(
     connection,
     "products",
     "net_profit",
   );
   if (!productHasNetProfit) {
+    // Add net_profit column AFTER the price column for logical ordering in schema
     await connection.query(`
       ALTER TABLE products
       ADD COLUMN net_profit DECIMAL(10,2) NOT NULL DEFAULT 0.00
@@ -32,12 +84,14 @@ async function ensureFinancialColumnsWithConnection(connection) {
     `);
   }
 
+  // ── Check order_items.unit_net_profit ──────────────────────────────────────
   const orderItemsHaveUnitNetProfit = await hasColumn(
     connection,
     "order_items",
     "unit_net_profit",
   );
   if (!orderItemsHaveUnitNetProfit) {
+    // Add unit_net_profit AFTER price so schema reads logically
     await connection.query(`
       ALTER TABLE order_items
       ADD COLUMN unit_net_profit DECIMAL(10,2) NOT NULL DEFAULT 0.00
@@ -46,21 +100,36 @@ async function ensureFinancialColumnsWithConnection(connection) {
   }
 }
 
+/**
+ * Public API: Ensures the financial columns exist before any query that needs them.
+ *
+ * Two call modes:
+ *  1. `ensureFinancialColumns(connection)` — Uses the provided connection
+ *     (use this when inside a transaction so the check runs atomically)
+ *  2. `ensureFinancialColumns()` — Acquires its own connection from the pool
+ *     and uses a module-level singleton promise to avoid running more than once
+ *
+ * @param {object|null} [connection=null] - Optional active MySQL connection
+ */
 export async function ensureFinancialColumns(connection = null) {
   if (connection) {
+    // When called with an explicit connection (within a transaction), run immediately
     await ensureFinancialColumnsWithConnection(connection);
     return;
   }
 
+  // When called without a connection, use/create the singleton promise
+  // This ensures the migration is only attempted ONCE across all concurrent requests
   if (!ensureFinancialColumnsPromise) {
     ensureFinancialColumnsPromise = (async () => {
       const managedConnection = await db.getConnection();
       try {
         await ensureFinancialColumnsWithConnection(managedConnection);
       } finally {
-        managedConnection.release();
+        managedConnection.release(); // Always release back to pool
       }
     })().catch((error) => {
+      // Reset to null on failure so the next request can retry
       ensureFinancialColumnsPromise = null;
       throw error;
     });

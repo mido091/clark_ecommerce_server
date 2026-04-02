@@ -1,3 +1,19 @@
+/**
+ * @file orders.controllers.js
+ * @description Centralized business logic for processing and managing orders.
+ *
+ * This controller handles one of the most critical flows in the application: Checkout.
+ * 
+ * Key architectural features:
+ *  - TRANSACTIONS: `createOrder` and `updateOrderStatus` use strict MySQL Transactions (`connection.beginTransaction()`).
+ *    This ensures that payment validation, stock deduction, and order creation are ATOMIC (all succeed or all fail).
+ *  - STOCK DEDUCTION: Stock is deducted instantly upon order creation via `deductOrderItemStock`.
+ *  - CONCURRENCY CONTROL: `SELECT ... FOR UPDATE` is used heavily in `createOrder` to lock 
+ *    the product/variant rows, preventing race conditions where two users buy the last item at the exact same millisecond.
+ *  - FINANCIAL SNAPSHOTS: Net profit and prices are snapshot copied into `order_items`. 
+ *    If the admin changes a product's price later, the past order's historical records won't break.
+ */
+
 import db from "../config/db.js";
 import {
   deductOrderItemStock,
@@ -133,6 +149,15 @@ async function attachOrderItems(connection, orders) {
   });
 }
 
+/**
+ * GET /api/orders
+ * 
+ * Admin endpoint to list all orders globally across the platform.
+ * Supports pagination, text search (by ID, email, name), and status filtering.
+ *
+ * @route   GET /api/orders
+ * @access  Protected (Admin/Owner only)
+ */
 export const getAllOrders = async (req, res, next) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
@@ -211,6 +236,14 @@ export const getAllOrders = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/orders/me
+ * 
+ * Fetches the paginated order history for the currently logged-in user.
+ *
+ * @route   GET /api/orders/me
+ * @access  Protected (User only)
+ */
 export const getUserOrders = async (req, res, next) => {
   try {
     const userId = req.user.id;
@@ -267,6 +300,16 @@ export const getUserOrders = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/orders/:id
+ * 
+ * Fetches full details for a single order containing its items and status.
+ * Access is restricted: regular users can only fetch their own orders, 
+ * while Admins can fetch any order ID.
+ *
+ * @route   GET /api/orders/:id
+ * @access  Protected (Owner of order OR Admin)
+ */
 export const getOrderById = async (req, res, next) => {
   try {
     const orderId = req.params.id;
@@ -322,6 +365,24 @@ export const getOrderById = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/orders
+ * 
+ * Massive, critical endpoint that processes user checkout.
+ * 
+ * Execution Flow:
+ *  1. Validation: Address, phone number, empty carts.
+ *  2. Lock Creation: Starts a DB Transaction -> Locks the requested Products/Variants (`FOR UPDATE`).
+ *  3. Stock Verification: Cross-checks cart quantities vs hard locked database stock.
+ *  4. Coupon Handling: Applies promo codes and limits.
+ *  5. Order Row Insertion: Mints the main `orders` row.
+ *  6. Order Items Insertion: Batch inserts into `order_items` (copying price and profit snapshots).
+ *  7. Stock Deduction: Fires the variantStock util to instantly reserve the actual physical stock.
+ *  8. Commit Transaction -> Success.
+ *
+ * @route   POST /api/orders
+ * @access  Protected (User only)
+ */
 export const createOrder = async (req, res, next) => {
   const connection = await db.getConnection();
   try {
@@ -776,6 +837,20 @@ export const createOrder = async (req, res, next) => {
   }
 };
 
+/**
+ * PUT /api/orders/:id/status
+ * 
+ * Allows an admin to push an order through its fulfilment lifecycle.
+ * E.g., 'pending' -> 'verified' -> 'shipped' -> 'delivered'.
+ * 
+ * Reversal Logic:
+ *  If an order is moved to 'cancelled', 'rejected', or 'returned',
+ *  this endpoint triggers an atomic `restoreOrderItemStock` to return the 
+ *  items back to the physical warehouse stock.
+ *
+ * @route   PUT /api/orders/:id/status
+ * @access  Protected (Admin/Owner only)
+ */
 export const updateOrderStatus = async (req, res, next) => {
   const connection = await db.getConnection();
   try {
