@@ -23,6 +23,7 @@ import reviewsRoutes from "./routes/reviews.routes.js";
 import messagesRoutes from "./routes/messages.routes.js";
 import couponRoutes from "./routes/coupon.routes.js";
 import wishlistRoutes from "./routes/wishlist.routes.js";
+import dashboardRoutes from "./routes/dashboard.routes.js";
 
 // ── App ───────────────────────────────────────────────────────────
 const app = express();
@@ -148,6 +149,10 @@ router.use("/coupons", couponRoutes);
 // Canonical prefix: /api/wishlist
 router.use("/wishlist", wishlistRoutes);
 
+// Dashboard
+// Canonical prefix: /api/dashboard
+router.use("/dashboard", dashboardRoutes);
+
 // Mount all API routes under /api
 app.use("/api", router);
 
@@ -169,6 +174,7 @@ const PORT = process.env.PORT || 5001;
 if (process.env.NODE_ENV !== "production") {
   app.listen(PORT, () => {
     console.log(`✅ Local server running on http://localhost:${PORT}`);
+    console.log("Connecting to:", process.env.DB_HOST);
   });
 }
 

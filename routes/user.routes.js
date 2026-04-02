@@ -11,6 +11,7 @@ import {
   logoutUser,
 } from "../controllers/AuthController.js";
 import {
+  getCurrentUser,
   getAllUsers,
   getUserById,
   updateUser,
@@ -25,6 +26,7 @@ const router = Router();
 router.post("/register", authLimiter, upload.single("image"), registerUser);
 router.post("/login", authLimiter, loginUser);
 router.post("/logout", logoutUser);
+router.get("/me", verifyToken, getCurrentUser);
 
 // ── Protected: self or admin/owner ─────────────────────────────────
 // GET  /users/:id  — user can fetch their own profile; admins can fetch any

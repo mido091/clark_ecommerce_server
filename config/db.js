@@ -1,40 +1,68 @@
-import mysql from "mysql2";
-import dotenv from "dotenv";
+/**
+ * @file db.js
+ * @description Database connection pool configuration using mysql2.
+ * This module exports a promise-based MySQL connection pool with support
+ * for named placeholders and automatic keep-alive.
+ */
+
+import mysql from "mysql2/promise";
+import { env } from "./env.js";
+import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+const resolveSslConfig = () => {
+  const rawValue = `${process.env.DB_ATTR_SSL_CA || "isrgrootx1.pem"}`.trim();
 
-// ── Connection pool ────────────────────────────────────────────────
-// connectionLimit kept low (3) so we don't exhaust Aiven's free-tier
-// connection quota while an old server process may still be running.
-// Connections are created lazily on first query — no blocking startup test.
-const db = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
+  if (!rawValue) {
+    return undefined;
+  }
+
+  if (rawValue.startsWith("-----BEGIN CERTIFICATE-----")) {
+    return {
+      ca: rawValue,
+      rejectUnauthorized: false,
+    };
+  }
+
+  const certificatePath = path.isAbsolute(rawValue)
+    ? rawValue
+    : path.join(process.cwd(), rawValue);
+
+  if (!fs.existsSync(certificatePath)) {
+    console.warn("SSL CA file not found; using relaxed TLS settings without custom CA", {
+      certificatePath,
+    });
+    return {
+      rejectUnauthorized: false,
+    };
+  }
+
+  return {
+    ca: fs.readFileSync(certificatePath, "utf8"),
+    rejectUnauthorized: false,
+  };
+};
+
+const pool = mysql.createPool({
+  host: env.dbHost,
+  user: env.dbUser,
+  password: env.dbPassword,
+  database: env.dbName,
+  port: env.dbPort,
+  ssl: resolveSslConfig(),
+  namedPlaceholders: true,
   waitForConnections: true,
-  connectionLimit: 10, // increased for seeding
+  connectionLimit: 10,
   queueLimit: 0,
-  connectTimeout: 30000, // 30 s to wait for Aiven to accept connection
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : null,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+});
+pool.on("error", (err) => {
+  console.error("Unexpected error on idle database client", {
+    name: err.name,
+    message: err.message,
+  });
 });
 
-// Lazy connection test — runs 2s after startup so it doesn't block
-// the server or crash the process if connections are temporarily exhausted.
-setTimeout(() => {
-  db.getConnection((err, conn) => {
-    if (err) {
-      console.error("❌ DB connection failed:", err.code, "-", err.message);
-    } else {
-      console.log("✅ Database connected to:", process.env.DB_HOST);
-      conn.release();
-    }
-  });
-}, 2000);
-
-export default db.promise();
+export { pool };
+export default pool;

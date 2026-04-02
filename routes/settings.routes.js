@@ -2,16 +2,26 @@ import { Router } from "express";
 import {
   getSettings,
   updateSettings,
+  updateShippingSettings,
 } from "../controllers/settings.controllers.js";
-import { verifyToken, verifyOwner } from "../middlewares/auth.js";
+import {
+  verifyToken,
+  verifyOwner,
+  verifyAdminOrOwner,
+} from "../middlewares/auth.js";
 import { logoUpload } from "../middlewares/upload.js";
 
 const router = Router();
 
-// Public — any visitor can read site settings
 router.get("/", getSettings);
 
-// Protected — only the Owner can change settings
+router.put(
+  "/shipping",
+  verifyToken,
+  verifyAdminOrOwner,
+  updateShippingSettings,
+);
+
 router.put(
   "/",
   verifyToken,

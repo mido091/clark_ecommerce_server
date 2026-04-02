@@ -1,4 +1,5 @@
 import multer from "multer";
+import path from "path";
 import { v2 as cloudinary } from "cloudinary";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import crypto from "crypto";
@@ -24,28 +25,46 @@ const storage = new CloudinaryStorage({
   },
 });
 
-import { fileTypeFromBuffer } from "file-type";
+const buildFileFilter = ({ allowedMimeTypes, allowedExtensions, message }) => {
+  return (req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const mime = `${file.mimetype || ""}`.toLowerCase();
+    const isAllowedMime = allowedMimeTypes.includes(mime);
+    const isAllowedExt = allowedExtensions.includes(ext);
 
-const fileFilter = async (req, file, cb) => {
-  const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
-  
-  if (!allowedMimeTypes.includes(file.mimetype)) {
-    const error = new Error("Invalid file type. Only JPEG, PNG, and WEBP images are allowed.");
-    error.status = 400;
-    return cb(error, false);
-  }
+    if (!isAllowedMime && !isAllowedExt) {
+      const error = new Error(message);
+      error.status = 400;
+      return cb(error, false);
+    }
 
-  cb(null, true);
+    cb(null, true);
+  };
 };
 
-// We will add a post-upload middleware for buffer validation since Multer's fileFilter 
-// only has access to the stream metadata, not the full buffer if using Cloudinary directly.
-// However, we can use a separate middleware after upload to verify.
+const defaultFileFilter = buildFileFilter({
+  allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+  allowedExtensions: [".jpg", ".jpeg", ".png", ".webp"],
+  message: "Invalid file type. Only JPEG, PNG, and WEBP images are allowed.",
+});
+
+const settingsAssetFileFilter = buildFileFilter({
+  allowedMimeTypes: [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/svg+xml",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+  ],
+  allowedExtensions: [".jpg", ".jpeg", ".png", ".webp", ".svg", ".ico"],
+  message: "Invalid file type. Allowed formats: JPG, PNG, WEBP, SVG, and ICO.",
+});
 
 // Multer configuration
 const upload = multer({
   storage: storage,
-  fileFilter,
+  fileFilter: defaultFileFilter,
   limits: {
     fileSize: 2 * 1024 * 1024, // 2MB limit
   },
@@ -58,7 +77,7 @@ const logoStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: "settings_logos",
-    allowed_formats: ["jpg", "jpeg", "png", "webp", "svg"],
+    allowed_formats: ["jpg", "jpeg", "png", "webp", "svg", "ico"],
     resource_type: "image",
     public_id: (req, file) => `logo_${crypto.randomUUID()}`,
     transformation: [{ width: 800, crop: "limit" }],
@@ -67,6 +86,6 @@ const logoStorage = new CloudinaryStorage({
 
 export const logoUpload = multer({
   storage: logoStorage,
-  fileFilter,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB max for logo
+  fileFilter: settingsAssetFileFilter,
+  limits: { fileSize: 1024 * 1024 }, // 1 MB max for settings brand assets
 });

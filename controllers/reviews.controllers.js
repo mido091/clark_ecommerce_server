@@ -31,7 +31,10 @@ export const createReview = async (req, res, next) => {
        JOIN orders o ON o.id = oi.order_id
        WHERE o.user_id = ? 
          AND oi.product_id = ?
-         AND (o.payment_status IN ('paid', 'verified') OR o.status = 'Delivered')
+         AND (
+           o.payment_status = 'paid'
+           OR o.status IN ('verified', 'out_for_delivery', 'shipped', 'delivered')
+         )
        LIMIT 1`,
       [userId, product_id],
     );

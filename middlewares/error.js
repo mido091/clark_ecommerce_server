@@ -15,7 +15,7 @@ export const errorHandler = (err, req, res, next) => {
   if (err.name === "MulterError") {
     statusCode = 400;
     if (err.code === "LIMIT_FILE_SIZE") {
-      message = "File is too large. Maximum size allowed is 2MB.";
+      message = "File is too large. Maximum size allowed is 1MB for site brand assets.";
     } else {
       message = `Upload error: ${err.message}`;
     }

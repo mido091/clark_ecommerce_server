@@ -20,21 +20,21 @@ router.post(
   "/",
   verifyToken,
   verifyAdminOrOwner,
-  upload.array("images"),
+  upload.any(),
   createProduct,
 );
 router.patch(
   "/:id",
   verifyToken,
   verifyAdminOrOwner,
-  upload.array("images"),
+  upload.any(),
   updateProduct,
 );
 router.put(
   "/:id",
   verifyToken,
   verifyAdminOrOwner,
-  upload.array("images"),
+  upload.any(),
   updateProduct,
 );
 router.delete("/:id", verifyToken, verifyAdminOrOwner, deleteProduct);

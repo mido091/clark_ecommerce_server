@@ -1,4 +1,5 @@
 import db from "../config/db.js";
+import { restoreOrderItemStock } from "../utils/variantStock.js";
 
 // ── GET /api/payments/admin/pending (Admin/Owner) ───────────────────
 export const getPendingPayments = async (req, res, next) => {
@@ -90,7 +91,6 @@ export const verifyPayment = async (req, res, next) => {
     const { status, rejection_reason } = req.body;
 
     if (!["paid", "rejected"].includes(status)) {
-      await connection.release();
       return res
         .status(400)
         .json({ success: false, message: "Invalid status" });
@@ -99,6 +99,19 @@ export const verifyPayment = async (req, res, next) => {
     // Start transaction to safely deduplicate stock if paid
     await connection.beginTransaction();
 
+    const [[existingOrder]] = await connection.query(
+      "SELECT status, payment_status, inventory_reserved FROM orders WHERE id = ? FOR UPDATE",
+      [orderId],
+    );
+
+    if (!existingOrder) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
     if (status === "paid") {
       // Mark payment paid, advance order to 'confirmed'
       await connection.query(
@@ -106,31 +119,19 @@ export const verifyPayment = async (req, res, next) => {
         [orderId],
       );
     } else if (status === "rejected") {
+      const hasReservedInventory = Boolean(
+        Number(existingOrder.inventory_reserved || 0),
+      );
+
       // 1. Cancel the order AND reject the payment atomically
       await connection.query(
-        "UPDATE orders SET payment_status = 'rejected', status = 'cancelled', rejection_reason = ? WHERE id = ?",
+        "UPDATE orders SET payment_status = 'rejected', status = 'cancelled', rejection_reason = ?, inventory_reserved = 0 WHERE id = ?",
         [rejection_reason || "Payment could not be verified.", orderId],
       );
 
-      // 2. Restore stock only if it was previously deducted (order was verified/confirmed)
-      const [[prevOrder]] = await connection.query(
-        "SELECT status FROM orders WHERE id = ?",
-        [orderId],
-      );
-      if (
-        prevOrder &&
-        ["verified", "confirmed", "paid"].includes(prevOrder.status)
-      ) {
-        const [items] = await connection.query(
-          "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
-          [orderId],
-        );
-        for (const item of items) {
-          await connection.query(
-            "UPDATE products SET stock = stock + ? WHERE id = ?",
-            [item.quantity, item.product_id],
-          );
-        }
+      // 2. Restore stock for any order that still had reserved inventory
+      if (hasReservedInventory) {
+        await restoreOrderItemStock(connection, orderId);
       }
     }
 

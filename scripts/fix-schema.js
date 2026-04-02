@@ -28,7 +28,7 @@ async function fixSchema() {
         logo_url VARCHAR(255) DEFAULT '',
         footer_logo_url VARCHAR(255) DEFAULT '',
         favicon_url VARCHAR(255) DEFAULT '',
-        currency_code VARCHAR(10) DEFAULT 'USD',
+        currency_code VARCHAR(10) DEFAULT 'EGP',
         contact_email VARCHAR(255) DEFAULT '',
         whatsapp_number VARCHAR(50) DEFAULT '',
         google_analytics_id VARCHAR(50) DEFAULT '',

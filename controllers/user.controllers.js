@@ -3,6 +3,28 @@ import bcrypt from "bcryptjs";
 
 // Public registration and login are handled in AuthController.js
 
+const getCurrentUser = async (req, res, next) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT id, name, email, phone, role, image FROM users WHERE id = ?",
+      [req.user.id],
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user: rows[0],
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ── getAllUsers ────────────────────────────────────────────────────
 // Protected: admin or owner only (enforced at route level)
 const getAllUsers = async (req, res, next) => {
@@ -195,6 +217,7 @@ const deleteUser = async (req, res, next) => {
 
 // export
 export {
+  getCurrentUser,
   getAllUsers,
   getUserById,
   updateUser,
