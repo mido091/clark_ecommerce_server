@@ -9,6 +9,7 @@
  *  - total_orders        — Total number of orders ever placed
  *  - delivered_revenue   — Sum of total_price for delivered orders only
  *  - delivered_net_profit — Sum of net profit from delivered order items
+ *  - total_returns       — Count of orders marked as returned
  *  - pending_payments    — Count of orders awaiting payment verification
  *  - total_products      — Total product count
  *  - total_users         — Total user count (only visible to the "owner" role)
@@ -46,24 +47,39 @@ export const getDashboardStats = async (req, res, next) => {
     // Only the "owner" gets to see the total user count
     const isOwner = req.user?.role === "owner";
 
+    // Date Filters
+    const { start_date, end_date } = req.query;
+    let orderDateSql = "";
+    let userDateSql = "";
+    let productDateSql = "";
+    let params = [];
+
+    if (start_date && end_date) {
+      orderDateSql = " AND o.created_at BETWEEN ? AND ?";
+      userDateSql = " WHERE created_at BETWEEN ? AND ?";
+      productDateSql = " WHERE created_at BETWEEN ? AND ?";
+      params = [new Date(start_date), new Date(end_date)];
+    }
+
     // ── Run all queries in parallel for better performance ──────────────────
     const [
       [orderCountRows],    // Total orders ever placed
       [revenueRows],       // Total revenue from delivered orders
       [netProfitRows],     // Net profit from delivered orders
+      [returnsRows],       // Count of returned orders
       [pendingPaymentRows],// Orders waiting for payment verification
       [productRows],       // Total product count
       [recentOrders],      // 10 most recent orders (for activity feed)
       [userRows],          // Total user count (owner-only)
     ] = await Promise.all([
-      db.query("SELECT COUNT(*) AS total_orders FROM orders"),
+      db.query(`SELECT COUNT(*) AS total_orders FROM orders o WHERE 1=1 ${orderDateSql}`, params),
 
       // Only count revenue from fully delivered orders
       db.query(`
-        SELECT COALESCE(SUM(total_price), 0) AS delivered_revenue
-        FROM orders
-        WHERE status = 'delivered'
-      `),
+        SELECT COALESCE(SUM(o.total_price), 0) AS delivered_revenue
+        FROM orders o
+        WHERE o.status = 'delivered' ${orderDateSql}
+      `, params),
 
       // Net profit = sum of (unit_net_profit × quantity) for each delivered order item
       // COALESCE chain: use snapshot value → fallback to current product price → default 0
@@ -75,17 +91,23 @@ export const getDashboardStats = async (req, res, next) => {
         FROM order_items oi
         INNER JOIN orders o ON o.id = oi.order_id
         LEFT JOIN products p ON p.id = oi.product_id
-        WHERE o.status = 'delivered'
-      `),
+        WHERE o.status = 'delivered' ${orderDateSql}
+      `, params),
+
+      db.query(`
+        SELECT COUNT(*) AS total_returns
+        FROM orders o
+        WHERE o.status = 'returned' ${orderDateSql}
+      `, params),
 
       // Count orders where payment hasn't been confirmed yet
       db.query(`
         SELECT COUNT(*) AS pending_payments
-        FROM orders
-        WHERE payment_status IN ('pending', 'pending_verification')
-      `),
+        FROM orders o
+        WHERE o.payment_status IN ('pending', 'pending_verification') ${orderDateSql}
+      `, params),
 
-      db.query("SELECT COUNT(*) AS total_products FROM products"),
+      db.query(`SELECT COUNT(*) AS total_products FROM products${productDateSql}`, params),
 
       // Recent 10 orders with user info for the activity table
       db.query(`
@@ -99,13 +121,14 @@ export const getDashboardStats = async (req, res, next) => {
           u.email
         FROM orders o
         LEFT JOIN users u ON u.id = o.user_id
+        WHERE 1=1 ${orderDateSql}
         ORDER BY o.created_at DESC
         LIMIT 10
-      `),
+      `, params),
 
       // User count only for owner — otherwise return a placeholder promise
       isOwner
-        ? db.query("SELECT COUNT(*) AS total_users FROM users")
+        ? db.query(`SELECT COUNT(*) AS total_users FROM users ${userDateSql}`, params)
         : Promise.resolve([[{ total_users: null }]]),
     ]);
 
@@ -115,6 +138,7 @@ export const getDashboardStats = async (req, res, next) => {
         total_orders: Number(orderCountRows[0]?.total_orders || 0),
         delivered_revenue: Number(revenueRows[0]?.delivered_revenue || 0),
         delivered_net_profit: Number(netProfitRows[0]?.delivered_net_profit || 0),
+        total_returns: Number(returnsRows[0]?.total_returns || 0),
         pending_payments: Number(pendingPaymentRows[0]?.pending_payments || 0),
         total_products: Number(productRows[0]?.total_products || 0),
         // null = user is an admin (not owner), undefined values become null in JSON
