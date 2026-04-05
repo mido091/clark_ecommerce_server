@@ -33,6 +33,7 @@ function normalizeSettingsAssets(row = {}) {
     logo_url: decodeHtmlEntities(row.logo_url || ""),
     footer_logo_url: decodeHtmlEntities(row.footer_logo_url || ""),
     favicon_url: decodeHtmlEntities(row.favicon_url || ""),
+    hero_image_url: decodeHtmlEntities(row.hero_image_url || ""),
   };
 }
 
@@ -152,6 +153,13 @@ const updateSettings = async (req, res, next) => {
       "favicon_url",
       "favicon_url",
     );
+    merged.hero_image_url = resolveAsset(
+      req,
+      old,
+      "hero_image",
+      "hero_image_url",
+      "hero_image_url",
+    );
 
     await cleanupCloudinary(req.files?.logo?.[0]?.path, old.logo_url);
     await cleanupCloudinary(
@@ -159,6 +167,7 @@ const updateSettings = async (req, res, next) => {
       old.footer_logo_url,
     );
     await cleanupCloudinary(req.files?.favicon?.[0]?.path, old.favicon_url);
+    await cleanupCloudinary(req.files?.hero_image?.[0]?.path, old.hero_image_url);
 
     const cols = Object.keys(merged);
     const vals = Object.values(merged);
