@@ -914,7 +914,9 @@ export const updateOrderStatus = async (req, res, next) => {
     const nextPaymentStatus =
       ["cancelled", "rejected"].includes(status) && currentOrder.status !== "cancelled"
         ? "rejected"
-        : undefined;
+        : status === "delivered"
+          ? "paid"
+          : undefined;
 
     const nextInventoryReserved = isNowReversingInventory
       ? 0
